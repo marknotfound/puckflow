@@ -1,5 +1,23 @@
 {
   "name": "@puckflow/db",
   "private": true,
-  "type": "module"
+  "type": "module",
+  "exports": "./src/index.ts",
+  "scripts": {
+    "lint": "eslint src drizzle.config.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests --exclude '**/*.integration.test.ts'",
+    "test:integration": "vitest run --maxWorkers=1",
+    "migrate": "drizzle-kit migrate --config drizzle.config.ts"
+  },
+  "dependencies": {
+    "drizzle-orm": "0.45.2",
+    "postgres": "3.4.9",
+    "uuid": "14.0.1"
+  },
+  "devDependencies": {
+    "drizzle-kit": "0.31.10",
+    "testcontainers": "12.0.4",
+    "vitest": "4.1.10"
+  }
 }
