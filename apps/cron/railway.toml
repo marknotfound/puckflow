@@ -1,0 +1,9 @@
+[build]
+builder = "RAILPACK"
+buildCommand = "pnpm --filter @puckflow/cron build"
+watchPatterns = ["/apps/cron/**", "/packages/core/**", "/packages/db/**", "/package.json", "/pnpm-lock.yaml", "/pnpm-workspace.yaml", "/turbo.json"]
+
+[deploy]
+startCommand = "node apps/cron/dist/main.js"
+cronSchedule = "*/5 * * * *"
+restartPolicyType = "NEVER"

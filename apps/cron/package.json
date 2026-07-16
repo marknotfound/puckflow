@@ -1,5 +1,22 @@
 {
   "name": "@puckflow/cron",
   "private": true,
-  "type": "module"
+  "type": "module",
+  "scripts": {
+    "build": "tsup",
+    "lint": "eslint src tsup.config.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests --exclude '**/*.integration.test.ts'",
+    "test:integration": "vitest run --maxWorkers=1"
+  },
+  "dependencies": {
+    "@puckflow/db": "workspace:*",
+    "@sentry/node": "10.65.0",
+    "pino": "10.3.1",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "tsup": "8.5.1",
+    "vitest": "4.1.10"
+  }
 }

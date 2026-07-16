@@ -1,0 +1,11 @@
+[build]
+builder = "RAILPACK"
+buildCommand = "pnpm --filter @puckflow/worker build"
+watchPatterns = ["/apps/worker/**", "/packages/core/**", "/packages/db/**", "/package.json", "/pnpm-lock.yaml", "/pnpm-workspace.yaml", "/turbo.json"]
+
+[deploy]
+startCommand = "node apps/worker/dist/server.js"
+healthcheckPath = "/health/ready"
+healthcheckTimeout = 120
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3
