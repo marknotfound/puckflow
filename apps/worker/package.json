@@ -1,0 +1,5 @@
+{
+  "name": "@puckflow/worker",
+  "private": true,
+  "type": "module"
+}

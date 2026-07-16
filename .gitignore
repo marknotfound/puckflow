@@ -1,0 +1,15 @@
+node_modules/
+.turbo/
+dist/
+.next/
+.expo/
+coverage/
+*.tsbuildinfo
+
+.env
+.env.*
+!.env.example
+
+.DS_Store
+.sentryclirc
+*.sentry-build-plugin-file

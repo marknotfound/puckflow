@@ -1,0 +1,5 @@
+{
+  "name": "@puckflow/cron",
+  "private": true,
+  "type": "module"
+}
