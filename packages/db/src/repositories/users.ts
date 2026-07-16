@@ -1,6 +1,6 @@
 import { and, eq, isNull } from 'drizzle-orm'
 
-import type { Database } from '../client.js'
+import type { Database, DbTransaction } from '../client.js'
 import { generateId } from '../ids.js'
 import { users, type User } from '../schema/users.js'
 
@@ -12,7 +12,7 @@ export type ClerkIdentity = {
 }
 
 export class UserRepository {
-  constructor(private readonly database: Database) {}
+  constructor(private readonly database: Database | DbTransaction) {}
 
   async findByClerkId(clerkId: string): Promise<User | null> {
     const [user] = await this.database

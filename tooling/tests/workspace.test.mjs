@@ -39,7 +39,7 @@ test('pins the repository toolchain', () => {
 test('declares the complete workspace and root script contract', () => {
   assert.equal(
     read('pnpm-workspace.yaml'),
-    "packages:\n  - 'apps/*'\n  - 'packages/*'\n",
+    "packages:\n  - 'apps/*'\n  - 'packages/*'\nallowBuilds:\n  cpu-features: false\n  esbuild: true\n  protobufjs: false\n  ssh2: false\n",
   )
 
   const manifests = ['apps', 'packages'].flatMap((directory) =>

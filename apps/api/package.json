@@ -1,5 +1,33 @@
 {
   "name": "@puckflow/api",
   "private": true,
-  "type": "module"
+  "type": "module",
+  "scripts": {
+    "build": "tsup",
+    "lint": "eslint src tsup.config.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --exclude '**/*.integration.test.ts'",
+    "test:integration": "vitest run --maxWorkers=1 --passWithNoTests"
+  },
+  "dependencies": {
+    "@clerk/backend": "3.11.4",
+    "@clerk/express": "2.1.40",
+    "@puckflow/core": "workspace:*",
+    "@puckflow/db": "workspace:*",
+    "@sentry/node": "10.65.0",
+    "drizzle-orm": "0.45.2",
+    "express": "5.2.1",
+    "express-rate-limit": "8.5.2",
+    "helmet": "8.3.0",
+    "pino": "10.3.1",
+    "pino-http": "11.0.0",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@types/express": "5.0.6",
+    "@types/supertest": "7.2.1",
+    "supertest": "7.2.2",
+    "tsup": "8.5.1",
+    "vitest": "4.1.10"
+  }
 }
