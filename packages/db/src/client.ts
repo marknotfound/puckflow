@@ -25,10 +25,17 @@ export function createDatabase(url: string): Database {
   return database
 }
 
-export async function closeDatabase(database: Database): Promise<void> {
+export async function closeDatabase(
+  database: Database,
+  options: { timeoutMs?: number } = {},
+): Promise<void> {
   const client = clients.get(database)
   if (client) {
     clients.delete(database)
-    await client.end()
+    await client.end(
+      options.timeoutMs === undefined
+        ? undefined
+        : { timeout: Math.max(1, options.timeoutMs) / 1_000 },
+    )
   }
 }

@@ -2,7 +2,7 @@ import { createServer, type Server } from 'node:http'
 import { pathToFileURL } from 'node:url'
 
 import * as Sentry from '@sentry/node'
-import { closeDatabase, createDatabase } from '@puckflow/db'
+import { closeDatabase, createDatabase, type Database } from '@puckflow/db'
 import { sql } from 'drizzle-orm'
 import pino from 'pino'
 
@@ -13,7 +13,13 @@ import {
   sanitizedWorkerException,
   workerShutdownError,
 } from './errors.js'
-import { runWorkerIteration, type WorkerLogger } from './runner.js'
+import {
+  createWorkerActivityTracker,
+  runWorkerIteration,
+  type WorkerLogger,
+} from './runner.js'
+
+export { createWorkerActivityTracker, runWorkerIteration } from './runner.js'
 
 export interface WorkerSignals {
   once(event: 'SIGTERM' | 'SIGINT', listener: () => void): unknown
@@ -23,9 +29,10 @@ export interface WorkerSignals {
 export type WorkerProcessDependencies = {
   signals: WorkerSignals
   runIteration(signal: AbortSignal): Promise<unknown>
+  waitForInFlight(): Promise<void>
   sleep(signal: AbortSignal): Promise<void>
-  closeHealthServer(): Promise<void>
-  closeDatabase(): Promise<void>
+  closeHealthServer(timeoutMs: number): Promise<void>
+  closeDatabase(timeoutMs: number): Promise<void>
   flushSentry(timeoutMs: number): Promise<unknown>
   forceExit(code: number): void
   shutdownTimeoutMs: number
@@ -69,6 +76,7 @@ export async function runWorkerProcess(
   let stopping = false
   let currentOperation: Promise<unknown> | undefined
   let forceExit = false
+  let shutdownDeadline: number | undefined
   const shutdownController = new AbortController()
   let resolveShutdown: () => void = () => undefined
   const shutdownRequested = new Promise<void>((resolve) => {
@@ -77,6 +85,7 @@ export async function runWorkerProcess(
   const requestShutdown = (signal: 'SIGTERM' | 'SIGINT') => {
     if (stopping) return
     stopping = true
+    shutdownDeadline = Date.now() + dependencies.shutdownTimeoutMs
     dependencies.logger.info({ signal }, 'worker shutting down')
     shutdownController.abort()
     resolveShutdown()
@@ -94,9 +103,12 @@ export async function runWorkerProcess(
         shutdownRequested.then(() => 'shutdown' as const),
       ])
       if (outcome === 'shutdown') {
-        forceExit = !(await settlesWithin(
-          currentOperation,
-          dependencies.shutdownTimeoutMs,
+        forceExit = !(await settlesByDeadline(
+          Promise.all([
+            settle(currentOperation),
+            settle(callSafely(() => dependencies.waitForInFlight())),
+          ]),
+          shutdownDeadline ?? Date.now(),
         ))
         break
       }
@@ -110,9 +122,12 @@ export async function runWorkerProcess(
         shutdownRequested.then(() => 'shutdown' as const),
       ])
       if (sleepOutcome === 'shutdown') {
-        forceExit = !(await settlesWithin(
-          currentOperation,
-          dependencies.shutdownTimeoutMs,
+        forceExit = !(await settlesByDeadline(
+          Promise.all([
+            settle(currentOperation),
+            settle(callSafely(() => dependencies.waitForInFlight())),
+          ]),
+          shutdownDeadline ?? Date.now(),
         ))
         break
       }
@@ -122,15 +137,21 @@ export async function runWorkerProcess(
   } finally {
     dependencies.signals.removeListener('SIGTERM', onSigterm)
     dependencies.signals.removeListener('SIGINT', onSigint)
-    try {
-      await dependencies.closeHealthServer()
-    } finally {
-      try {
-        await dependencies.closeDatabase()
-      } finally {
-        await dependencies.flushSentry(2_000)
-      }
-    }
+    const deadline =
+      shutdownDeadline ?? Date.now() + dependencies.shutdownTimeoutMs
+    const healthClosed = await cleanupByDeadline(
+      (timeoutMs) => dependencies.closeHealthServer(timeoutMs),
+      deadline,
+    )
+    const databaseClosed = await cleanupByDeadline(
+      (timeoutMs) => dependencies.closeDatabase(timeoutMs),
+      deadline,
+    )
+    const sentryFlushed = await cleanupByDeadline(
+      (timeoutMs) => dependencies.flushSentry(Math.min(2_000, timeoutMs)),
+      deadline,
+    )
+    forceExit ||= !healthClosed || !databaseClosed || !sentryFlushed
   }
   if (forceExit) dependencies.forceExit(1)
 }
@@ -154,6 +175,7 @@ async function main(): Promise<void> {
   await listen(healthServer, config.healthPort)
   logger.info({ port: config.healthPort }, 'worker health server listening')
   const handlers = createJobHandlers(logger)
+  const activity = createWorkerActivityTracker()
 
   await runWorkerProcess({
     signals: process,
@@ -176,6 +198,7 @@ async function main(): Promise<void> {
             },
           },
           signal,
+          activity,
         })
         logger.info(result, 'worker iteration completed')
       } catch (error) {
@@ -184,9 +207,10 @@ async function main(): Promise<void> {
         Sentry.captureException(sanitizedWorkerException(error))
       }
     },
+    waitForInFlight: () => activity.waitForIdle(),
     sleep: (signal) => abortableDelay(config.pollIntervalMs, signal),
     closeHealthServer: () => closeServer(healthServer),
-    closeDatabase: () => closeDatabase(database),
+    closeDatabase: (timeoutMs) => closeDatabase(database, { timeoutMs }),
     flushSentry: (timeoutMs) => Sentry.flush(timeoutMs),
     forceExit: (code) => process.exit(code),
     shutdownTimeoutMs: config.shutdownTimeoutMs,
@@ -248,17 +272,75 @@ export function abortableDelay(
   })
 }
 
-function settlesWithin(
+function settlesByDeadline(
   operation: Promise<unknown>,
-  timeoutMs: number,
+  deadline: number,
 ): Promise<boolean> {
   return new Promise((resolve) => {
-    const timeout = setTimeout(() => resolve(false), timeoutMs)
+    const timeout = setTimeout(
+      () => resolve(false),
+      Math.max(0, deadline - Date.now()),
+    )
     void settle(operation).then(() => {
       clearTimeout(timeout)
       resolve(true)
     })
   })
+}
+
+async function cleanupByDeadline(
+  cleanup: (timeoutMs: number) => Promise<unknown>,
+  deadline: number,
+): Promise<boolean> {
+  const timeoutMs = Math.max(0, deadline - Date.now())
+  let operation: Promise<unknown>
+  try {
+    operation = cleanup(timeoutMs)
+  } catch {
+    return false
+  }
+  return settlesSuccessfullyByDeadline(operation, deadline)
+}
+
+function settlesSuccessfullyByDeadline(
+  operation: Promise<unknown>,
+  deadline: number,
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    const timeout = setTimeout(
+      () => resolve(false),
+      Math.max(0, deadline - Date.now()),
+    )
+    void operation.then(
+      () => {
+        clearTimeout(timeout)
+        resolve(true)
+      },
+      () => {
+        clearTimeout(timeout)
+        resolve(false)
+      },
+    )
+  })
+}
+
+function callSafely(operation: () => Promise<unknown>): Promise<unknown> {
+  try {
+    return operation()
+  } catch (error) {
+    return Promise.reject(sanitizedWorkerException(error))
+  }
+}
+
+export function openWorkerDatabase(url: string): Database {
+  return createDatabase(url)
+}
+
+export function closeWorkerDatabase(
+  database: Database,
+  timeoutMs: number,
+): Promise<void> {
+  return closeDatabase(database, { timeoutMs })
 }
 
 function settle(operation: Promise<unknown>): Promise<void> {

@@ -11,6 +11,7 @@ import {
   migrateDatabase,
   type Database,
 } from '@puckflow/db'
+import { sql } from 'drizzle-orm'
 import {
   afterAll,
   beforeAll,
@@ -109,14 +110,14 @@ describe('worker iteration', () => {
     expect(rows.filter(({ status }) => status === 'pending')).toHaveLength(1)
   })
 
-  test('sanitizes secret-bearing handler failures in persistence, logs, and Sentry', async () => {
+  test('collapses valid-looking untrusted error identities before every sink', async () => {
     await database.insert(jobs).values([
       { ...jobValues('retry'), maxAttempts: 2 },
       { ...jobValues('dead-letter'), maxAttempts: 1 },
     ])
-    const failure = Object.assign(new Error('message-fixture-secret'), {
-      name: 'ProviderError-name-fixture-secret=',
-      code: 'code-fixture-secret=',
+    const failure = Object.assign(new Error('MessageSecretXYZ'), {
+      name: 'ProviderTokenABC',
+      code: 'CustomerSecret123',
     })
     const captureException = vi.fn()
     const logError = vi.fn<WorkerLogger['error']>()
@@ -161,7 +162,9 @@ describe('worker iteration', () => {
       logs: logError.mock.calls,
       sentry: captureException.mock.calls,
     })
-    expect(observableData).not.toContain('fixture-secret')
+    expect(observableData).not.toContain('ProviderTokenABC')
+    expect(observableData).not.toContain('CustomerSecret123')
+    expect(observableData).not.toContain('MessageSecretXYZ')
     expect(captureException).toHaveBeenCalledWith(
       expect.objectContaining({
         name: 'Error',
@@ -171,6 +174,69 @@ describe('worker iteration', () => {
     )
     expect(captureException).toHaveBeenCalledTimes(2)
   })
+
+  test.each([
+    [
+      'throwing accessor',
+      Object.defineProperty({}, 'name', {
+        get() {
+          throw new Error('AccessorSecretABC')
+        },
+      }),
+    ],
+    [
+      'throwing proxy',
+      new Proxy(
+        {},
+        {
+          get() {
+            throw new Error('ProxySecretABC')
+          },
+        },
+      ),
+    ],
+  ])(
+    'releases claims when an untrusted %s error cannot be inspected',
+    async (_label, hostileError) => {
+      await database.insert(jobs).values(jobValues('hostile-error'))
+      const logError = vi.fn<WorkerLogger['error']>()
+      const captureException = vi.fn()
+
+      const result = await runWorkerIteration({
+        database,
+        workerId: 'worker-hostile-error',
+        now,
+        batchSize: 1,
+        handlers: {
+          'system.smoke': vi.fn<JobHandler>().mockRejectedValue(hostileError),
+        },
+        logger: { info: vi.fn(), error: logError },
+        sentry: { captureException },
+        signal: new AbortController().signal,
+      })
+
+      expect(result.retriedCount).toBe(1)
+      const rows = await database.select().from(jobs)
+      expect(rows).toEqual([
+        expect.objectContaining({
+          status: 'pending',
+          claimedAt: null,
+          claimedBy: null,
+          lastError: 'Error: unknown_error',
+        }),
+      ])
+      const observableData = JSON.stringify({
+        rows,
+        logs: logError.mock.calls,
+        sentry: captureException.mock.calls.map(([error]) => ({
+          name: error instanceof Error ? error.name : 'not-an-error',
+          message: error instanceof Error ? error.message : 'not-an-error',
+        })),
+      })
+      expect(observableData).not.toContain('SecretABC')
+    },
+    2_000,
+  )
 
   test('fails an unknown category without completing it', async () => {
     await database
@@ -251,6 +317,65 @@ describe('worker iteration', () => {
       }),
     ])
   })
+
+  test('a real SIGTERM tracks a production iteration handler until forced exit', async () => {
+    await database.insert(jobs).values(jobValues('child-stuck-handler'))
+
+    const result = await runSignalFixture(
+      'production-stuck-handler',
+      {
+        DATABASE_URL: container.runtimeUrl,
+        WORKER_NOW: now.toISOString(),
+      },
+      'handler-started\n',
+    )
+
+    expect(result.code).toBe(1)
+    expect(result.signal).toBeNull()
+    expect(result.stdout).toContain('handler-started')
+    expect(result.stdout).toContain('health-closed')
+    expect(result.stdout).toContain('database-closed')
+    expect(result.stdout).toContain('sentry-flushed')
+    expect(result.elapsedMs).toBeLessThan(2_000)
+    await expect(database.select().from(jobs)).resolves.toEqual([
+      expect.objectContaining({
+        deterministicKey: 'child-stuck-handler',
+        status: 'pending',
+        claimedAt: null,
+        claimedBy: null,
+        lastError: 'WorkerShutdown: aborted',
+      }),
+    ])
+  })
+
+  test('database close bounds a pending query', async () => {
+    const pendingDatabase = createDatabase(container.runtimeUrl)
+    const pendingQuery = pendingDatabase.execute(sql`select pg_sleep(2)`).then(
+      () => 'resolved' as const,
+      () => 'rejected' as const,
+    )
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    const startedAt = Date.now()
+
+    await closeDatabase(pendingDatabase, { timeoutMs: 100 })
+
+    expect(Date.now() - startedAt).toBeLessThan(500)
+    await expect(pendingQuery).resolves.toBe('rejected')
+  })
+
+  test('one shutdown deadline bounds real pending-query cleanup and attempts every resource', async () => {
+    const result = await runSignalFixture('stuck-cleanup', {
+      DATABASE_URL: container.runtimeUrl,
+    })
+
+    expect(result.code).toBe(1)
+    expect(result.signal).toBeNull()
+    expect(result.stdout).toContain('pending-query-started')
+    expect(result.stdout).toContain('health-close-attempted')
+    expect(result.stdout).toContain('database-close-attempted')
+    expect(result.stdout).toContain('sentry-flush-attempted')
+    expect(result.elapsedMs).toBeLessThan(2_000)
+  })
 })
 
 describe('worker service lifecycle', () => {
@@ -327,6 +452,7 @@ describe('worker service lifecycle', () => {
     const running = runWorkerProcess({
       signals,
       runIteration,
+      waitForInFlight: () => Promise.resolve(),
       sleep: vi.fn().mockResolvedValue(undefined),
       closeHealthServer,
       closeDatabase,
@@ -359,6 +485,7 @@ describe('worker service lifecycle', () => {
         iterationStarted.resolve()
         await new Promise(() => undefined)
       },
+      waitForInFlight: () => Promise.resolve(),
       sleep: vi.fn().mockResolvedValue(undefined),
       closeHealthServer,
       closeDatabase,
@@ -380,10 +507,7 @@ describe('worker service lifecycle', () => {
     )
   })
 
-  test.each([
-    ['polling', 0],
-    ['stuck-handler', 1],
-  ] as const)(
+  test.each([['polling', 0]] as const)(
     'a real SIGTERM during %s exits with code %i after cleanup',
     async (mode, expectedCode) => {
       const result = await runSignalFixture(mode)
@@ -442,19 +566,24 @@ function deferred(): { promise: Promise<void>; resolve(): void } {
   return { promise, resolve: resolvePromise }
 }
 
-async function runSignalFixture(mode: 'polling' | 'stuck-handler') {
+async function runSignalFixture(
+  mode: 'polling' | 'production-stuck-handler' | 'stuck-cleanup',
+  environment: NodeJS.ProcessEnv = {},
+  readyMarker = 'ready\n',
+) {
   const fixturePath = fileURLToPath(
     new URL('../test-fixtures/worker-process.mjs', import.meta.url),
   )
   const child = spawn(process.execPath, [fixturePath, mode], {
     stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, ...environment },
   })
   let stdout = ''
   let stderr = ''
   let signaled = false
   child.stdout.setEncoding('utf8').on('data', (chunk: string) => {
     stdout += chunk
-    if (!signaled && stdout.includes('ready\n')) {
+    if (!signaled && stdout.includes(readyMarker)) {
       signaled = true
       child.kill('SIGTERM')
     }

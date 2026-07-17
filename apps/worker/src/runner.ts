@@ -1,8 +1,10 @@
 import { claimJobs, completeJob, failJob, type Database } from '@puckflow/db'
 
 import {
+  jobCompletionError,
   safeErrorIdentity,
   sanitizedWorkerException,
+  unknownJobCategoryError,
   workerShutdownError,
 } from './errors.js'
 
@@ -27,6 +29,35 @@ export type JobHandlerInput = {
 
 export type JobHandler = (input: JobHandlerInput) => Promise<void>
 
+export type WorkerActivityTracker = {
+  track<T>(operation: Promise<T>): Promise<T>
+  waitForIdle(): Promise<void>
+}
+
+export function createWorkerActivityTracker(): WorkerActivityTracker {
+  const pending = new Set<Promise<unknown>>()
+  const idleWaiters = new Set<() => void>()
+  return {
+    track<T>(operation: Promise<T>): Promise<T> {
+      const tracked = Promise.resolve(operation)
+      pending.add(tracked)
+      const markSettled = () => {
+        pending.delete(tracked)
+        if (pending.size === 0) {
+          for (const resolve of idleWaiters) resolve()
+          idleWaiters.clear()
+        }
+      }
+      void tracked.then(markSettled, markSettled)
+      return tracked
+    },
+    waitForIdle(): Promise<void> {
+      if (pending.size === 0) return Promise.resolve()
+      return new Promise((resolve) => idleWaiters.add(resolve))
+    },
+  }
+}
+
 export type WorkerIterationResult = {
   claimedCount: number
   completedCount: number
@@ -43,6 +74,7 @@ export type WorkerIterationDependencies = {
   logger: WorkerLogger
   sentry: WorkerSentry
   signal: AbortSignal
+  activity?: WorkerActivityTracker
 }
 
 export async function runWorkerIteration(
@@ -59,6 +91,7 @@ export async function runWorkerIteration(
     retriedCount: 0,
     deadLetteredCount: 0,
   }
+  const activity = dependencies.activity ?? createWorkerActivityTracker()
 
   for (const job of claimed) {
     const handler = dependencies.handlers[job.category]
@@ -73,7 +106,7 @@ export async function runWorkerIteration(
       continue
     }
     try {
-      if (!handler) throw unknownCategory(job.category)
+      if (!handler) throw unknownJobCategoryError()
       await runWithAbort(
         handler({
           jobId: job.id,
@@ -82,13 +115,14 @@ export async function runWorkerIteration(
           signal: dependencies.signal,
         }),
         dependencies.signal,
+        activity,
       )
       const completed = await completeJob(dependencies.database, {
         jobId: job.id,
         workerId: dependencies.workerId,
         now: dependencies.now,
       })
-      if (!completed) throw jobCompletionFailure()
+      if (!completed) throw jobCompletionError()
       result.completedCount += 1
     } catch (error) {
       await recordFailure(
@@ -142,7 +176,9 @@ async function recordFailure(
 function runWithAbort<T>(
   operation: Promise<T>,
   signal: AbortSignal,
+  activity: WorkerActivityTracker,
 ): Promise<T> {
+  const trackedOperation = activity.track(operation)
   if (signal.aborted) return Promise.reject(workerShutdownError())
   return new Promise<T>((resolve, reject) => {
     const onAbort = () => {
@@ -150,7 +186,7 @@ function runWithAbort<T>(
       reject(workerShutdownError())
     }
     signal.addEventListener('abort', onAbort, { once: true })
-    void operation.then(
+    void trackedOperation.then(
       (value) => {
         signal.removeEventListener('abort', onAbort)
         resolve(value)
@@ -160,19 +196,5 @@ function runWithAbort<T>(
         reject(sanitizedWorkerException(error))
       },
     )
-  })
-}
-
-function unknownCategory(category: string): Error & { code: string } {
-  return Object.assign(new Error('Unsupported job category'), {
-    name: 'UnknownJobCategory',
-    code: category,
-  })
-}
-
-function jobCompletionFailure(): Error & { code: string } {
-  return Object.assign(new Error('Claimed job could not be completed'), {
-    name: 'JobCompletionError',
-    code: 'claim_lost',
   })
 }
