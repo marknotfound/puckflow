@@ -8,6 +8,11 @@ import pino from 'pino'
 
 import { loadWorkerConfig } from './config.js'
 import { createJobHandlers } from './handlers.js'
+import {
+  safeErrorIdentity,
+  sanitizedWorkerException,
+  workerShutdownError,
+} from './errors.js'
 import { runWorkerIteration, type WorkerLogger } from './runner.js'
 
 export interface WorkerSignals {
@@ -17,11 +22,12 @@ export interface WorkerSignals {
 
 export type WorkerProcessDependencies = {
   signals: WorkerSignals
-  runIteration(): Promise<unknown>
-  sleep(): Promise<void>
+  runIteration(signal: AbortSignal): Promise<unknown>
+  sleep(signal: AbortSignal): Promise<void>
   closeHealthServer(): Promise<void>
   closeDatabase(): Promise<void>
   flushSentry(timeoutMs: number): Promise<unknown>
+  forceExit(code: number): void
   shutdownTimeoutMs: number
   logger: WorkerLogger
 }
@@ -61,7 +67,9 @@ export async function runWorkerProcess(
   dependencies: WorkerProcessDependencies,
 ): Promise<void> {
   let stopping = false
-  let currentIteration: Promise<unknown> | undefined
+  let currentOperation: Promise<unknown> | undefined
+  let forceExit = false
+  const shutdownController = new AbortController()
   let resolveShutdown: () => void = () => undefined
   const shutdownRequested = new Promise<void>((resolve) => {
     resolveShutdown = resolve
@@ -70,6 +78,7 @@ export async function runWorkerProcess(
     if (stopping) return
     stopping = true
     dependencies.logger.info({ signal }, 'worker shutting down')
+    shutdownController.abort()
     resolveShutdown()
   }
   const onSigterm = () => requestShutdown('SIGTERM')
@@ -79,23 +88,36 @@ export async function runWorkerProcess(
 
   try {
     while (!stopping) {
-      currentIteration = dependencies.runIteration()
+      currentOperation = dependencies.runIteration(shutdownController.signal)
       const outcome = await Promise.race([
-        currentIteration.then(() => 'iteration' as const),
+        settle(currentOperation).then(() => 'iteration' as const),
         shutdownRequested.then(() => 'shutdown' as const),
       ])
       if (outcome === 'shutdown') {
-        await waitAtMost(currentIteration, dependencies.shutdownTimeoutMs)
+        forceExit = !(await settlesWithin(
+          currentOperation,
+          dependencies.shutdownTimeoutMs,
+        ))
         break
       }
-      currentIteration = undefined
+      await currentOperation
+      currentOperation = undefined
       if (stopping) break
 
+      currentOperation = dependencies.sleep(shutdownController.signal)
       const sleepOutcome = await Promise.race([
-        dependencies.sleep().then(() => 'sleep' as const),
+        settle(currentOperation).then(() => 'sleep' as const),
         shutdownRequested.then(() => 'shutdown' as const),
       ])
-      if (sleepOutcome === 'shutdown') break
+      if (sleepOutcome === 'shutdown') {
+        forceExit = !(await settlesWithin(
+          currentOperation,
+          dependencies.shutdownTimeoutMs,
+        ))
+        break
+      }
+      await currentOperation
+      currentOperation = undefined
     }
   } finally {
     dependencies.signals.removeListener('SIGTERM', onSigterm)
@@ -110,6 +132,7 @@ export async function runWorkerProcess(
       }
     }
   }
+  if (forceExit) dependencies.forceExit(1)
 }
 
 async function main(): Promise<void> {
@@ -134,7 +157,7 @@ async function main(): Promise<void> {
 
   await runWorkerProcess({
     signals: process,
-    runIteration: async () => {
+    runIteration: async (signal) => {
       try {
         const result = await runWorkerIteration({
           database,
@@ -152,17 +175,20 @@ async function main(): Promise<void> {
               })
             },
           },
+          signal,
         })
         logger.info(result, 'worker iteration completed')
       } catch (error) {
-        logger.error({ errorType: errorType(error) }, 'worker iteration failed')
-        Sentry.captureException(error)
+        const identity = safeErrorIdentity(error)
+        logger.error(identity, 'worker iteration failed')
+        Sentry.captureException(sanitizedWorkerException(error))
       }
     },
-    sleep: () => delay(config.pollIntervalMs),
+    sleep: (signal) => abortableDelay(config.pollIntervalMs, signal),
     closeHealthServer: () => closeServer(healthServer),
     closeDatabase: () => closeDatabase(database),
     flushSentry: (timeoutMs) => Sentry.flush(timeoutMs),
+    forceExit: (code) => process.exit(code),
     shutdownTimeoutMs: config.shutdownTimeoutMs,
     logger,
   })
@@ -187,10 +213,6 @@ function createLogger(options: {
   })
 }
 
-function errorType(error: unknown): string {
-  return error instanceof Error ? error.name : 'UnknownError'
-}
-
 function listen(server: Server, port: number): Promise<void> {
   return new Promise((resolve, reject) => {
     server.once('error', reject)
@@ -207,27 +229,43 @@ function closeServer(server: Server): Promise<void> {
   })
 }
 
-function delay(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds))
+export function abortableDelay(
+  milliseconds: number,
+  signal: AbortSignal,
+): Promise<void> {
+  if (signal.aborted) return Promise.reject(workerShutdownError())
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort)
+      resolve()
+    }, milliseconds)
+    const onAbort = () => {
+      clearTimeout(timeout)
+      signal.removeEventListener('abort', onAbort)
+      reject(workerShutdownError())
+    }
+    signal.addEventListener('abort', onAbort, { once: true })
+  })
 }
 
-function waitAtMost(
+function settlesWithin(
   operation: Promise<unknown>,
   timeoutMs: number,
-): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const timeout = setTimeout(resolve, timeoutMs)
-    void operation.then(
-      () => {
-        clearTimeout(timeout)
-        resolve()
-      },
-      (error: unknown) => {
-        clearTimeout(timeout)
-        reject(error instanceof Error ? error : new Error('Operation failed'))
-      },
-    )
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    const timeout = setTimeout(() => resolve(false), timeoutMs)
+    void settle(operation).then(() => {
+      clearTimeout(timeout)
+      resolve(true)
+    })
   })
+}
+
+function settle(operation: Promise<unknown>): Promise<void> {
+  return operation.then(
+    () => undefined,
+    () => undefined,
+  )
 }
 
 function isMainModule(): boolean {

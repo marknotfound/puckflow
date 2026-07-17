@@ -1,5 +1,7 @@
+import { spawn } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import type { Server } from 'node:http'
+import { fileURLToPath } from 'node:url'
 
 import {
   closeDatabase,
@@ -74,6 +76,7 @@ describe('worker iteration', () => {
       handlers: { 'system.smoke': handler },
       logger: logger(),
       sentry: sentry(),
+      signal: new AbortController().signal,
     })
 
     expect(result).toEqual({
@@ -87,31 +90,37 @@ describe('worker iteration', () => {
     const secondInput = handler.mock.calls[1]?.[0]
     expect(typeof firstInput?.jobId).toBe('string')
     expect(typeof secondInput?.jobId).toBe('string')
+    expect(firstInput?.signal).toBeInstanceOf(AbortSignal)
+    expect(secondInput?.signal).toBeInstanceOf(AbortSignal)
     expect(handler).toHaveBeenNthCalledWith(1, {
       jobId: firstInput?.jobId,
       deterministicKey: 'smoke-1',
       payload: { deterministicKey: 'smoke-1' },
+      signal: firstInput?.signal,
     })
     expect(handler).toHaveBeenNthCalledWith(2, {
       jobId: secondInput?.jobId,
       deterministicKey: 'smoke-2',
       payload: { deterministicKey: 'smoke-2' },
+      signal: secondInput?.signal,
     })
     const rows = await database.select().from(jobs)
     expect(rows.filter(({ status }) => status === 'completed')).toHaveLength(2)
     expect(rows.filter(({ status }) => status === 'pending')).toHaveLength(1)
   })
 
-  test('applies retry and dead-letter behavior to sanitized handler failures', async () => {
+  test('sanitizes secret-bearing handler failures in persistence, logs, and Sentry', async () => {
     await database.insert(jobs).values([
       { ...jobValues('retry'), maxAttempts: 2 },
       { ...jobValues('dead-letter'), maxAttempts: 1 },
     ])
-    const failure = Object.assign(new Error('secret provider response'), {
-      name: 'ProviderError',
-      code: 'temporary_failure',
+    const failure = Object.assign(new Error('message-fixture-secret'), {
+      name: 'ProviderError-name-fixture-secret=',
+      code: 'code-fixture-secret=',
     })
     const captureException = vi.fn()
+    const logError = vi.fn<WorkerLogger['error']>()
+    const workerLogger: WorkerLogger = { info: vi.fn(), error: logError }
 
     const result = await runWorkerIteration({
       database,
@@ -121,8 +130,9 @@ describe('worker iteration', () => {
       handlers: {
         'system.smoke': vi.fn<JobHandler>().mockRejectedValue(failure),
       },
-      logger: logger(),
+      logger: workerLogger,
       sentry: { captureException },
+      signal: new AbortController().signal,
     })
 
     expect(result).toEqual({
@@ -137,16 +147,28 @@ describe('worker iteration', () => {
         expect.objectContaining({
           deterministicKey: 'retry',
           status: 'pending',
-          lastError: 'ProviderError: temporary_failure',
+          lastError: 'Error: unknown_error',
         }),
         expect.objectContaining({
           deterministicKey: 'dead-letter',
           status: 'dead_letter',
-          lastError: 'ProviderError: temporary_failure',
+          lastError: 'Error: unknown_error',
         }),
       ]),
     )
-    expect(JSON.stringify(rows)).not.toContain('secret provider response')
+    const observableData = JSON.stringify({
+      rows,
+      logs: logError.mock.calls,
+      sentry: captureException.mock.calls,
+    })
+    expect(observableData).not.toContain('fixture-secret')
+    expect(captureException).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'Error',
+        message: 'Error: unknown_error',
+      }),
+      expect.any(Object),
+    )
     expect(captureException).toHaveBeenCalledTimes(2)
   })
 
@@ -163,6 +185,7 @@ describe('worker iteration', () => {
       handlers: {},
       logger: logger(),
       sentry: sentry(),
+      signal: new AbortController().signal,
     })
 
     expect(result).toEqual({
@@ -176,6 +199,55 @@ describe('worker iteration', () => {
         status: 'pending',
         completedAt: null,
         lastError: 'UnknownJobCategory: unsupported_category',
+      }),
+    ])
+  })
+
+  test('aborting a stuck handler releases it and every unstarted claimed job', async () => {
+    await database
+      .insert(jobs)
+      .values([jobValues('stuck'), jobValues('unstarted')])
+    const controller = new AbortController()
+    const handlerStarted = deferred()
+    const handler = vi.fn<JobHandler>(async () => {
+      handlerStarted.resolve()
+      await new Promise(() => undefined)
+    })
+
+    const running = runWorkerIteration({
+      database,
+      workerId: 'worker-shutdown',
+      now,
+      batchSize: 2,
+      handlers: { 'system.smoke': handler },
+      logger: logger(),
+      sentry: sentry(),
+      signal: controller.signal,
+    })
+    await handlerStarted.promise
+    controller.abort()
+
+    await expect(running).resolves.toEqual({
+      claimedCount: 2,
+      completedCount: 0,
+      retriedCount: 2,
+      deadLetteredCount: 0,
+    })
+    expect(handler).toHaveBeenCalledOnce()
+    await expect(database.select().from(jobs)).resolves.toEqual([
+      expect.objectContaining({
+        deterministicKey: 'stuck',
+        status: 'pending',
+        claimedAt: null,
+        claimedBy: null,
+        lastError: 'WorkerShutdown: aborted',
+      }),
+      expect.objectContaining({
+        deterministicKey: 'unstarted',
+        status: 'pending',
+        claimedAt: null,
+        claimedBy: null,
+        lastError: 'WorkerShutdown: aborted',
       }),
     ])
   })
@@ -259,6 +331,7 @@ describe('worker service lifecycle', () => {
       closeHealthServer,
       closeDatabase,
       flushSentry,
+      forceExit: vi.fn(),
       shutdownTimeoutMs: 10_000,
       logger: logger(),
     })
@@ -276,8 +349,10 @@ describe('worker service lifecycle', () => {
   test('shutdown timeout bounds a stuck batch before cleanup', async () => {
     const signals = new EventEmitter() as EventEmitter & WorkerSignals
     const iterationStarted = deferred()
+    const closeHealthServer = vi.fn().mockResolvedValue(undefined)
     const closeDatabase = vi.fn().mockResolvedValue(undefined)
     const flushSentry = vi.fn().mockResolvedValue(true)
+    const forceExit = vi.fn()
     const running = runWorkerProcess({
       signals,
       runIteration: async () => {
@@ -285,9 +360,10 @@ describe('worker service lifecycle', () => {
         await new Promise(() => undefined)
       },
       sleep: vi.fn().mockResolvedValue(undefined),
-      closeHealthServer: vi.fn().mockResolvedValue(undefined),
+      closeHealthServer,
       closeDatabase,
       flushSentry,
+      forceExit,
       shutdownTimeoutMs: 20,
       logger: logger(),
     })
@@ -298,7 +374,29 @@ describe('worker service lifecycle', () => {
 
     expect(closeDatabase).toHaveBeenCalledOnce()
     expect(flushSentry).toHaveBeenCalledOnce()
+    expect(forceExit).toHaveBeenCalledWith(1)
+    expect(forceExit.mock.invocationCallOrder[0]).toBeGreaterThan(
+      flushSentry.mock.invocationCallOrder[0] ?? 0,
+    )
   })
+
+  test.each([
+    ['polling', 0],
+    ['stuck-handler', 1],
+  ] as const)(
+    'a real SIGTERM during %s exits with code %i after cleanup',
+    async (mode, expectedCode) => {
+      const result = await runSignalFixture(mode)
+
+      expect(result.code).toBe(expectedCode)
+      expect(result.signal).toBeNull()
+      expect(result.stdout).toContain('health-closed')
+      expect(result.stdout).toContain('database-closed')
+      expect(result.stdout).toContain('sentry-flushed')
+      expect(result.elapsedMs).toBeLessThan(2_000)
+    },
+    5_000,
+  )
 })
 
 function jobValues(deterministicKey: string) {
@@ -342,4 +440,47 @@ function deferred(): { promise: Promise<void>; resolve(): void } {
     resolvePromise = resolve
   })
   return { promise, resolve: resolvePromise }
+}
+
+async function runSignalFixture(mode: 'polling' | 'stuck-handler') {
+  const fixturePath = fileURLToPath(
+    new URL('../test-fixtures/worker-process.mjs', import.meta.url),
+  )
+  const child = spawn(process.execPath, [fixturePath, mode], {
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  let stdout = ''
+  let stderr = ''
+  let signaled = false
+  child.stdout.setEncoding('utf8').on('data', (chunk: string) => {
+    stdout += chunk
+    if (!signaled && stdout.includes('ready\n')) {
+      signaled = true
+      child.kill('SIGTERM')
+    }
+  })
+  child.stderr.setEncoding('utf8').on('data', (chunk: string) => {
+    stderr += chunk
+  })
+  const startedAt = Date.now()
+
+  const outcome = await new Promise<{
+    code: number | null
+    signal: NodeJS.Signals | null
+  }>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      child.kill('SIGKILL')
+      reject(new Error(`Worker fixture timed out: ${stdout}\n${stderr}`))
+    }, 2_500)
+    child.once('error', (error) => {
+      clearTimeout(timeout)
+      reject(error)
+    })
+    child.once('exit', (code, signal) => {
+      clearTimeout(timeout)
+      resolve({ code, signal })
+    })
+  })
+
+  return { ...outcome, stdout, stderr, elapsedMs: Date.now() - startedAt }
 }

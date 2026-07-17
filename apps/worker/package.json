@@ -7,7 +7,7 @@
     "lint": "eslint src tsup.config.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests --exclude '**/*.integration.test.ts'",
-    "test:integration": "vitest run --maxWorkers=1"
+    "test:integration": "pnpm run build && vitest run --maxWorkers=1"
   },
   "dependencies": {
     "@puckflow/db": "workspace:*",

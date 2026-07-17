@@ -74,7 +74,46 @@ export function verifyRailwayConfig() {
       `${service} must be built by Railpack, not a repository Dockerfile`,
     )
   }
-  return services
+
+  const productionImageUser = verifyProductionImageUserDeviation()
+  return { services, productionImageUser }
+}
+
+function verifyProductionImageUserDeviation() {
+  const deviation = read('docs/operations/railpack-non-root-deviation.md')
+  const expected = {
+    status: 'accepted-platform-deviation',
+    railpackVersion: '0.31.1',
+    upstreamIssue: 'https://github.com/railwayapp/railpack/issues/286',
+    upstreamPullRequest: 'https://github.com/railwayapp/railpack/pull/547',
+  }
+  contains(deviation, `Status: \`${expected.status}\``, 'non-root deviation')
+  contains(
+    deviation,
+    `Railpack version reviewed: \`${expected.railpackVersion}\``,
+    'non-root deviation',
+  )
+  contains(deviation, expected.upstreamIssue, 'non-root deviation')
+  contains(deviation, expected.upstreamPullRequest, 'non-root deviation')
+  contains(
+    deviation,
+    'Owner: repository owner / platform operations',
+    'non-root deviation',
+  )
+  contains(deviation, 'Revisit trigger:', 'non-root deviation')
+  contains(
+    deviation,
+    '## Security impact and compensating controls',
+    'non-root deviation',
+  )
+  contains(
+    deviation,
+    '## Required production verification',
+    'non-root deviation',
+  )
+  contains(deviation, 'It is not full compliance', 'non-root deviation')
+  contains(deviation, 'test "$(id -u)" -ne 0', 'non-root deviation')
+  return expected
 }
 
 function read(path) {
@@ -97,6 +136,8 @@ function isMainModule() {
 }
 
 if (isMainModule()) {
-  const services = verifyRailwayConfig()
-  process.stdout.write(`Railway configuration valid: ${services.join(', ')}\n`)
+  const result = verifyRailwayConfig()
+  process.stdout.write(
+    `Railway configuration valid with documented ${result.productionImageUser.status}: ${result.services.join(', ')}\n`,
+  )
 }
