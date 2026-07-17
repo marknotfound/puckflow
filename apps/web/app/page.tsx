@@ -1,26 +1,23 @@
 import { MeCard } from '../src/me-card.js'
-import { getMeForSession, toMeCardError } from '../src/server-me.js'
+import { getMeResultForSession } from '../src/server-me.js'
 
 export const dynamic = 'force-dynamic'
 
 export async function refreshMe() {
   'use server'
-  return getMeForSession()
+  return getMeResultForSession()
 }
 
 export default async function HomePage() {
-  try {
-    const me = await getMeForSession()
-    return (
-      <main>
-        <MeCard initialMe={me} getMe={refreshMe} />
-      </main>
-    )
-  } catch (error) {
-    return (
-      <main>
-        <MeCard initialError={toMeCardError(error)} getMe={refreshMe} />
-      </main>
-    )
-  }
+  const result = await getMeResultForSession()
+  return (
+    <main>
+      <MeCard
+        {...(result.ok
+          ? { initialMe: result.me }
+          : { initialError: result.error })}
+        getMe={refreshMe}
+      />
+    </main>
+  )
 }

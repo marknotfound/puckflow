@@ -85,6 +85,10 @@ test('declares the complete workspace and root script contract', () => {
   }
 
   const rootScripts = readJson('package.json').scripts
+  assert.equal(
+    rootScripts.postinstall,
+    'pnpm --filter @puckflow/api-client build',
+  )
   for (const script of [
     'format:check',
     'lint',
@@ -128,6 +132,39 @@ test('leaves application image builds to the later Railway configuration issue',
       existsSync(new URL(`apps/${directory}/Dockerfile`, root)),
       false,
       `${directory} must not define a Dockerfile`,
+    )
+  }
+})
+
+test('records the accepted Expo SDK 57 mutable-registry deviation', () => {
+  const deviationPath = 'docs/operations/expo-sdk-57-registry-deviation.md'
+  assert.equal(existsSync(new URL(deviationPath, root)), true)
+  const deviation = read(deviationPath)
+
+  for (const required of [
+    'Reviewed: `2026-07-17`',
+    'Status: `accepted-version-ledger-deviation`',
+    'Online result: **FAIL (exit 1)**',
+    '`expo@57.0.4` | `~57.0.6`',
+    '`expo-linking@57.0.2` | `~57.0.3`',
+    '`expo-router@57.0.4` | `~57.0.6`',
+    '`expo-secure-store@57.0.0` | `~57.0.1`',
+    '`expo-system-ui@57.0.0` | `~57.0.1`',
+    '`@types/jest@30.0.0` | `29.5.14`',
+    '`jest@30.4.2` | `~29.7.0`',
+    '`jest-expo@57.0.1` | `~57.0.2`',
+    'Owner: repository owner / mobile platform operations',
+    '## Compatibility evidence',
+    '## Impact and compensating controls',
+    'Revisit trigger:',
+    '## Exact resolution check',
+    'expo install --check',
+    'Do not report this command as passing while this deviation is active.',
+  ]) {
+    assert.equal(
+      deviation.includes(required),
+      true,
+      `Expo registry deviation must contain ${required}`,
     )
   }
 })

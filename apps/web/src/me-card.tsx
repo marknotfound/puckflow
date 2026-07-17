@@ -1,6 +1,5 @@
 'use client'
 
-import { ApiProblemError } from '@puckflow/api-client'
 import type { Me } from '@puckflow/core'
 import { uiTokens } from '@puckflow/ui-tokens'
 import { useState } from 'react'
@@ -8,13 +7,16 @@ import { useState } from 'react'
 type MeCardProps = {
   initialMe?: Me
   initialError?: MeCardError
-  getMe: () => Promise<Me>
+  getMe: () => Promise<MeCardResult>
 }
 
 export type MeCardError = {
   detail: string
   requestId?: string
 }
+
+export type MeCardResult =
+  { ok: true; me: Me } | { ok: false; error: MeCardError }
 
 type CardState =
   | { status: 'ready'; me: Me }
@@ -36,16 +38,16 @@ export function MeCard({ initialMe, initialError, getMe }: MeCardProps) {
     if (state.status === 'ready' || state.status === 'loading') return
     setState({ status: 'loading', error: state.error })
     try {
-      setState({ status: 'ready', me: await getMe() })
-    } catch (error) {
+      const result = await getMe()
+      setState(
+        result.ok
+          ? { status: 'ready', me: result.me }
+          : { status: 'error', error: result.error },
+      )
+    } catch {
       setState({
         status: 'error',
-        error:
-          error instanceof ApiProblemError
-            ? error.requestId
-              ? { detail: error.message, requestId: error.requestId }
-              : { detail: error.message }
-            : { detail: 'Your profile is temporarily unavailable.' },
+        error: { detail: 'Your profile is temporarily unavailable.' },
       })
     }
   }

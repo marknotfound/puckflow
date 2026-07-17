@@ -63,8 +63,16 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
       })
       const body: unknown = await readJson(response)
       if (!response.ok) {
+        const mediaType = response.headers
+          .get('content-type')
+          ?.split(';', 1)[0]
+          ?.trim()
+          .toLowerCase()
+        if (mediaType !== 'application/problem+json') {
+          throw internalResponseError(response.status)
+        }
         const result = ProblemDetailsSchema.safeParse(body)
-        if (!result.success) {
+        if (!result.success || result.data.status !== response.status) {
           throw internalResponseError(response.status)
         }
         const problem = result.data

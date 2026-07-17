@@ -77,7 +77,14 @@ export function MeScreen({
 
   if (!isLoaded || isSignedIn === undefined) {
     return (
-      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+      <View
+        style={{
+          flex: 1,
+          alignItems: 'center',
+          justifyContent: 'center',
+          backgroundColor: colors.background,
+        }}
+      >
         <ActivityIndicator
           accessibilityLabel="Loading profile"
           color={colors.accent}
@@ -90,6 +97,7 @@ export function MeScreen({
   if (!isSignedIn) {
     return (
       <ScrollView
+        style={{ backgroundColor: colors.background }}
         contentInsetAdjustmentBehavior="automatic"
         contentContainerStyle={{
           flexGrow: 1,
@@ -97,6 +105,7 @@ export function MeScreen({
           justifyContent: 'center',
           padding: uiTokens.spacing.xl,
           gap: uiTokens.spacing.lg,
+          backgroundColor: colors.background,
         }}
       >
         <Text
@@ -133,7 +142,14 @@ export function MeScreen({
 
   if (profile.status === 'loading') {
     return (
-      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+      <View
+        style={{
+          flex: 1,
+          alignItems: 'center',
+          justifyContent: 'center',
+          backgroundColor: colors.background,
+        }}
+      >
         <ActivityIndicator
           accessibilityLabel="Loading profile"
           color={colors.accent}
@@ -146,12 +162,14 @@ export function MeScreen({
   if (profile.status === 'error') {
     return (
       <ScrollView
+        style={{ backgroundColor: colors.background }}
         contentInsetAdjustmentBehavior="automatic"
         contentContainerStyle={{
           flexGrow: 1,
           justifyContent: 'center',
           padding: uiTokens.spacing.xl,
           gap: uiTokens.spacing.lg,
+          backgroundColor: colors.background,
         }}
       >
         <View accessibilityRole="alert" style={{ gap: uiTokens.spacing.sm }}>
@@ -200,12 +218,14 @@ export function MeScreen({
   const { me } = profile
   return (
     <ScrollView
+      style={{ backgroundColor: colors.background }}
       contentInsetAdjustmentBehavior="automatic"
       contentContainerStyle={{
         flexGrow: 1,
         justifyContent: 'center',
         padding: uiTokens.spacing.xl,
         gap: uiTokens.spacing.md,
+        backgroundColor: colors.background,
       }}
     >
       {me.avatarUrl ? (

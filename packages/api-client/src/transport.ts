@@ -13,5 +13,11 @@ export function normalizeApiBaseUrl(value: string): string {
     throw new Error('API base URL must use HTTPS unless it is loopback')
   }
 
-  return value.replace(/\/+$/, '')
+  if (url.username || url.password || url.search || url.hash) {
+    throw new Error(
+      'API base URL must not contain credentials, query, or fragment',
+    )
+  }
+
+  return url.href.replace(/\/+$/, '')
 }

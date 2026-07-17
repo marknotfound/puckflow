@@ -21,10 +21,11 @@ describe('web deployment configuration', () => {
     expect(route).not.toMatch(/clerk|auth|api-client/i)
   })
 
-  it('protects every route except health and Clerk sign-in/up', () => {
+  it('excludes health before Clerk and protects other non-auth routes', () => {
     const proxy = read('../proxy.ts')
 
-    expect(proxy).toContain("'/api/health'")
+    expect(proxy).toContain('api/health(?:/|$)')
+    expect(proxy).not.toContain("createRouteMatcher(['/api/health'")
     expect(proxy).toContain("'/sign-in(.*)'")
     expect(proxy).toContain("'/sign-up(.*)'")
     expect(proxy).toContain('auth.protect()')

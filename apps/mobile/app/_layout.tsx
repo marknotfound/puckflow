@@ -2,25 +2,36 @@ import '../sentry.config'
 
 import { ClerkProvider } from '@clerk/expo'
 import * as Sentry from '@sentry/react-native'
-import { Stack } from 'expo-router'
+import { Stack, ThemeProvider } from 'expo-router'
+import { useColorScheme } from 'react-native'
 
+import { getMobileTheme } from '../src/mobile-theme'
 import { tokenCache } from '../src/token-cache'
 
-function requirePublicEnv(name: string): string {
-  const value = process.env[name] as string | undefined
-  if (!value) throw new Error(`${name} is required`)
-  return value
+const configuredPublishableKey = process.env
+  .EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY as string | undefined
+if (!configuredPublishableKey) {
+  throw new Error('EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY is required')
 }
-
-const publishableKey = requirePublicEnv('EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY')
+const publishableKey: string = configuredPublishableKey
 
 function RootLayout() {
+  const theme = getMobileTheme(useColorScheme())
+
   return (
-    <ClerkProvider publishableKey={publishableKey} tokenCache={tokenCache}>
-      <Stack>
-        <Stack.Screen name="index" options={{ title: 'Profile' }} />
-      </Stack>
-    </ClerkProvider>
+    <ThemeProvider value={theme}>
+      <ClerkProvider publishableKey={publishableKey} tokenCache={tokenCache}>
+        <Stack
+          screenOptions={{
+            contentStyle: { backgroundColor: theme.colors.background },
+            headerStyle: { backgroundColor: theme.colors.card },
+            headerTintColor: theme.colors.text,
+          }}
+        >
+          <Stack.Screen name="index" options={{ title: 'Profile' }} />
+        </Stack>
+      </ClerkProvider>
+    </ThemeProvider>
   )
 }
 

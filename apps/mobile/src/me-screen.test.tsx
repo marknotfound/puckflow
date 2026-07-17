@@ -1,6 +1,7 @@
 import { fireEvent, render, waitFor } from '@testing-library/react-native'
 import { StyleSheet } from 'react-native'
 import type { StyleProp, TextStyle, ViewStyle } from 'react-native'
+import { uiTokens } from '@puckflow/ui-tokens'
 
 import { MeScreen } from './me-screen'
 
@@ -21,6 +22,12 @@ function response(body: unknown, status: number): Response {
   return {
     ok: status >= 200 && status < 300,
     status,
+    headers: new Headers({
+      'content-type':
+        status >= 200 && status < 300
+          ? 'application/json'
+          : 'application/problem+json',
+    }),
     json: () => Promise.resolve(body),
   } as Response
 }
@@ -32,6 +39,12 @@ describe('MeScreen', () => {
     )
 
     expect(screen.getByLabelText('Loading profile')).toBeTruthy()
+    expect(
+      StyleSheet.flatten(
+        screen.getByLabelText('Loading profile').parent?.props
+          .style as StyleProp<ViewStyle>,
+      )?.backgroundColor,
+    ).toBe(uiTokens.color.light.background)
   })
 
   it('exposes a 44-point native sign-in button', async () => {
@@ -50,6 +63,13 @@ describe('MeScreen', () => {
     expect(StyleSheet.flatten(buttonProps.style)?.minHeight).toBe(44)
     await fireEvent.press(button)
     expect(onSignIn).toHaveBeenCalledTimes(1)
+    const scrollView = screen.container.queryAll(
+      (node) => node.props.contentInsetAdjustmentBehavior === 'automatic',
+    )[0]
+    expect(
+      StyleSheet.flatten(scrollView.props.style as StyleProp<ViewStyle>)
+        ?.backgroundColor,
+    ).toBe(uiTokens.color.light.background)
   })
 
   it('uses the injected session token to request and render /v1/me', async () => {

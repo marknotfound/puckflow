@@ -14,7 +14,7 @@ const me = {
 describe('MeCard', () => {
   it('renders the signed-in identity with accessible avatar text', () => {
     const { unmount } = render(
-      <MeCard initialMe={me} getMe={() => Promise.resolve(me)} />,
+      <MeCard initialMe={me} getMe={() => Promise.resolve({ ok: true, me })} />,
     )
 
     expect(screen.getByText('Signed in as')).toBeVisible()
@@ -29,14 +29,14 @@ describe('MeCard', () => {
     render(
       <MeCard
         initialMe={{ ...me, avatarUrl: null }}
-        getMe={() => Promise.resolve(me)}
+        getMe={() => Promise.resolve({ ok: true, me })}
       />,
     )
     expect(screen.queryByRole('img')).not.toBeInTheDocument()
   })
 
   it('shows a safe request ID and retries exactly once', async () => {
-    const getMe = vi.fn().mockResolvedValue(me)
+    const getMe = vi.fn().mockResolvedValue({ ok: true, me })
     const initialError = new ApiProblemError({
       code: 'INTERNAL',
       status: 503,
@@ -64,6 +64,30 @@ describe('MeCard', () => {
     await waitFor(() => expect(getMe).toHaveBeenCalledOnce())
     expect(
       await screen.findByRole('heading', { name: me.displayName }),
+    ).toBeVisible()
+  })
+
+  it('preserves a safe JSON-serialized error result returned by retry', async () => {
+    const serializedResult = JSON.parse(
+      JSON.stringify({
+        ok: false,
+        error: {
+          detail: 'Profile service is unavailable.',
+          requestId: 'serialized-server-request-17',
+        },
+      }),
+    ) as {
+      ok: false
+      error: { detail: string; requestId: string }
+    }
+    const getMe = vi.fn().mockResolvedValue(serializedResult)
+    render(<MeCard initialError={{ detail: 'Try again.' }} getMe={getMe} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry profile' }))
+
+    expect(await screen.findByText(serializedResult.error.detail)).toBeVisible()
+    expect(
+      screen.getByText(`Request ID: ${serializedResult.error.requestId}`),
     ).toBeVisible()
   })
 

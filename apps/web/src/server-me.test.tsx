@@ -1,7 +1,8 @@
 import { ApiProblemError } from '@puckflow/api-client'
+import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 
-import { toMeCardError } from './server-me.js'
+import { getMeResultForSession, toMeCardError } from './server-me.js'
 
 const mocks = vi.hoisted(() => ({
   auth: vi.fn(),
@@ -25,20 +26,53 @@ describe('server-only profile loading', () => {
     const sessionJwt = 'session-jwt-must-never-be-serialized'
     const getToken = vi.fn().mockResolvedValue(sessionJwt)
     mocks.auth.mockResolvedValue({ getToken })
-    mocks.createApiClient.mockReturnValue({
-      getMe: vi.fn().mockResolvedValue(me),
-    })
+    mocks.createApiClient.mockImplementation(
+      (options: { getToken: typeof getToken }) => ({
+        getMe: vi.fn(async () => {
+          await options.getToken()
+          return me
+        }),
+      }),
+    )
     process.env.API_INTERNAL_URL = 'http://127.0.0.1:3000'
 
     const { default: HomePage } = await import('../app/page.js')
     const page = await HomePage()
+    const html = renderToStaticMarkup(page)
 
     expect(mocks.createApiClient).toHaveBeenCalledWith({
       baseUrl: process.env.API_INTERNAL_URL,
       getToken,
     })
+    expect(getToken).toHaveBeenCalledOnce()
     expect(JSON.stringify(page)).not.toContain(sessionJwt)
+    expect(html).not.toContain(sessionJwt)
     expect(JSON.stringify(page)).toContain(me.id)
+    expect(html).toContain(me.id)
+  })
+
+  it('returns a JSON-serializable safe error result for a failed retry', async () => {
+    const problem = new ApiProblemError({
+      code: 'INTERNAL',
+      status: 503,
+      detail: 'Profile service is unavailable.',
+      requestId: 'server-action-request-17',
+    })
+    mocks.auth.mockResolvedValue({ getToken: vi.fn() })
+    mocks.createApiClient.mockReturnValue({
+      getMe: vi.fn().mockRejectedValue(problem),
+    })
+    process.env.API_INTERNAL_URL = 'http://127.0.0.1:3000'
+
+    const result = await getMeResultForSession()
+
+    expect(JSON.parse(JSON.stringify(result))).toEqual({
+      ok: false,
+      error: {
+        detail: problem.message,
+        requestId: problem.requestId,
+      },
+    })
   })
 
   it('preserves validated API Problem Details for the profile card', () => {

@@ -15,7 +15,8 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@puckflow/core": "workspace:*"
+    "@puckflow/core": "workspace:*",
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "tsup": "8.5.1",

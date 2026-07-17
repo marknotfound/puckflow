@@ -1,12 +1,14 @@
-type RedactableEvent = {
-  request?: {
-    headers?: Record<string, string>
-  }
-}
+import type { Event } from '@sentry/nextjs'
 
-export function redactSentryEvent<T extends RedactableEvent>(event: T): T {
-  const headers = event.request?.headers
-  if (!headers) return event
+export function redactSentryEvent<T extends Event>(event: T): T {
+  if (!event.request) return event
+
+  const safeRequest = { ...event.request }
+  delete safeRequest.cookies
+  const { headers } = safeRequest
+  if (!headers) {
+    return { ...event, request: safeRequest }
+  }
 
   const safeHeaders = Object.fromEntries(
     Object.entries(headers).filter(
@@ -17,7 +19,7 @@ export function redactSentryEvent<T extends RedactableEvent>(event: T): T {
   return {
     ...event,
     request: {
-      ...event.request,
+      ...safeRequest,
       headers: safeHeaders,
     },
   }
