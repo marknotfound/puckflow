@@ -1,5 +1,34 @@
 {
   "name": "@puckflow/mobile",
   "private": true,
-  "type": "module"
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "lint": "eslint app src app.config.ts sentry.config.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "jest --runInBand"
+  },
+  "dependencies": {
+    "@clerk/expo": "3.7.4",
+    "@puckflow/api-client": "workspace:*",
+    "@puckflow/core": "workspace:*",
+    "@puckflow/ui-tokens": "workspace:*",
+    "@sentry/react-native": "7.11.0",
+    "expo": "57.0.4",
+    "expo-linking": "57.0.2",
+    "expo-router": "57.0.4",
+    "expo-secure-store": "57.0.0",
+    "expo-status-bar": "57.0.1",
+    "expo-system-ui": "57.0.0",
+    "react": "19.2.3",
+    "react-native": "0.86.0",
+    "react-native-safe-area-context": "5.7.0"
+  },
+  "devDependencies": {
+    "@testing-library/react-native": "14.0.1",
+    "@types/jest": "30.0.0",
+    "@types/react": "19.2.17",
+    "jest": "30.4.2",
+    "jest-expo": "57.0.1"
+  }
 }

@@ -5,7 +5,7 @@ import { verifyRailwayConfig } from './verify-railway-config.mjs'
 
 test('validates current Railway service contracts and migration ownership', () => {
   assert.deepEqual(verifyRailwayConfig(), {
-    services: ['api', 'worker', 'cron'],
+    services: ['api', 'web', 'worker', 'cron'],
     productionImageUser: {
       status: 'accepted-platform-deviation',
       railpackVersion: '0.31.1',

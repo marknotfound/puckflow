@@ -1,8 +1,21 @@
 {
-  "extends": "../../tsconfig.base.json",
+  "extends": "expo/tsconfig.base",
   "compilerOptions": {
-    "jsx": "react-jsx",
-    "noEmit": true
+    "noEmit": true,
+    "strict": true,
+    "ignoreDeprecations": "6.0",
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./*"]
+    },
+    "types": ["jest", "node", "react"]
   },
-  "include": ["app/**/*.ts", "app/**/*.tsx", "src/**/*.ts", "src/**/*.tsx"]
+  "include": [
+    "app/**/*.ts",
+    "app/**/*.tsx",
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "app.config.ts",
+    "sentry.config.ts"
+  ]
 }

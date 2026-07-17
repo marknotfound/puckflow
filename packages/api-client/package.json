@@ -1,5 +1,24 @@
 {
   "name": "@puckflow/api-client",
   "private": true,
-  "type": "module"
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsup",
+    "lint": "eslint src tsup.config.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@puckflow/core": "workspace:*"
+  },
+  "devDependencies": {
+    "tsup": "8.5.1",
+    "vitest": "4.1.10"
+  }
 }

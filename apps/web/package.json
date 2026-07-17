@@ -1,5 +1,30 @@
 {
   "name": "@puckflow/web",
   "private": true,
-  "type": "module"
+  "type": "module",
+  "scripts": {
+    "build": "next build",
+    "lint": "eslint app src proxy.ts next.config.ts sentry.*.config.ts instrumentation.ts instrumentation-client.ts vitest.config.ts vitest.setup.ts",
+    "start": "next start",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@clerk/nextjs": "7.5.17",
+    "@puckflow/api-client": "workspace:*",
+    "@puckflow/core": "workspace:*",
+    "@puckflow/ui-tokens": "workspace:*",
+    "@sentry/nextjs": "10.65.0",
+    "next": "16.2.10",
+    "react": "19.2.3",
+    "react-dom": "19.2.3"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "6.9.1",
+    "@testing-library/react": "16.3.2",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "jsdom": "29.1.1",
+    "vitest": "4.1.10"
+  }
 }

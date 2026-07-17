@@ -39,7 +39,7 @@ test('pins the repository toolchain', () => {
 test('declares the complete workspace and root script contract', () => {
   assert.equal(
     read('pnpm-workspace.yaml'),
-    "packages:\n  - 'apps/*'\n  - 'packages/*'\nallowBuilds:\n  cpu-features: false\n  esbuild: true\n  protobufjs: false\n  ssh2: false\n",
+    "packages:\n  - 'apps/*'\n  - 'packages/*'\nallowBuilds:\n  '@sentry/cli': true\n  browser-tabs-lock: false\n  bufferutil: false\n  core-js: false\n  cpu-features: false\n  esbuild: true\n  protobufjs: false\n  sharp: true\n  ssh2: false\n  unrs-resolver: true\n  utf-8-validate: false\noverrides:\n  '@react-native/jest-preset>@jest/create-cache-key-function': 30.4.1\n  '@react-native/jest-preset>babel-jest': 30.4.1\n  '@react-native/jest-preset>jest-environment-node': 30.4.1\n  'jest-expo>@jest/create-cache-key-function': 30.4.1\n  'jest-expo>@jest/globals': 30.4.1\n  'jest-expo>babel-jest': 30.4.1\n  'jest-expo>jest-environment-jsdom': 30.4.1\n  'jest-expo>jest-snapshot': 30.4.1\n",
   )
 
   const manifests = ['apps', 'packages'].flatMap((directory) =>

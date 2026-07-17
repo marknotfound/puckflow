@@ -11,6 +11,12 @@ const contracts = {
     health: '/health/ready',
     restart: 'ON_FAILURE',
   },
+  web: {
+    build: 'pnpm --filter @puckflow/web build',
+    start: 'pnpm --filter @puckflow/web start',
+    health: '/api/health',
+    restart: 'ON_FAILURE',
+  },
   worker: {
     build: 'pnpm --filter @puckflow/worker build',
     start: 'node apps/worker/dist/server.js',
